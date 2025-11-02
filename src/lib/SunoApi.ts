@@ -755,10 +755,10 @@ class SunoApi {
       // Poll for WAV readiness
       logger.info('Polling for WAV file readiness...');
       const startTime = Date.now();
-      const maxWaitTime = 60000; // 60 seconds max wait
+      const maxWaitTime = 120000; // 120 seconds max wait
 
       while (Date.now() - startTime < maxWaitTime) {
-        await sleep(3); // Wait 3 seconds between checks
+        await sleep(2); // Wait 2 seconds between checks
         
         // Get clip info to check for WAV URL
         const clipInfo: any = await this.getClip(song_id);
