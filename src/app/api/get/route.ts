@@ -6,29 +6,16 @@ import { AudioInfo } from '@/lib/SunoApi';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * GET /api/get
- * 
- * Query parameters:
- * - ids: Comma-separated song IDs (optional)
- * - page: Page number for pagination (optional)
- * - all: If "true", fetches ALL songs across all pages (optional)
- * 
- * Examples:
- * - /api/get?ids=song1,song2        Get specific songs
- * - /api/get?page=0                 Get first page (20 songs)
- * - /api/get?all=true               Get ALL songs (240+)
- */
 export async function GET(req: NextRequest) {
   if (req.method === 'GET') {
     try {
       const url = new URL(req.url);
       const songIds = url.searchParams.get('ids');
       const page = url.searchParams.get('page');
-      const all = url.searchParams.get('all');
+      const all = url.searchParams.get('all');  // NEW!
       const cookie = (await cookies()).toString();
 
-      // If specific IDs are requested, fetch those songs
+      // Get specific songs by IDs
       if (songIds && songIds.length > 0) {
         const idsArray = songIds.split(',');
         const audioInfo = await (await sunoApi(cookie)).get(idsArray, page);
@@ -42,7 +29,7 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      // If all=true, fetch ALL songs across all pages
+      // Get ALL songs (NEW!)
       if (all === 'true') {
         console.log('Fetching all songs...');
         const allSongs = await fetchAllSongs(cookie);
@@ -62,7 +49,7 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      // Otherwise, fetch a specific page (or first page if no page specified)
+      // Get single page (default behavior)
       const audioInfo = await (await sunoApi(cookie)).get(undefined, page);
 
       return new NextResponse(JSON.stringify(audioInfo), {
@@ -97,11 +84,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/**
- * Fetches all songs by paginating through all available pages.
- * @param cookie The authentication cookie
- * @returns Promise resolving to array of all songs
- */
+// NEW FUNCTION: Gets all songs by looping through pages
 async function fetchAllSongs(cookie: string): Promise<AudioInfo[]> {
   const allSongs: AudioInfo[] = [];
   let currentPage = 0;
@@ -115,7 +98,6 @@ async function fetchAllSongs(cookie: string): Promise<AudioInfo[]> {
     try {
       const pageData = await api.get(undefined, currentPage.toString());
       
-      // If we get no songs or empty array, we've reached the end
       if (!pageData || pageData.length === 0) {
         hasMore = false;
         break;
@@ -123,18 +105,14 @@ async function fetchAllSongs(cookie: string): Promise<AudioInfo[]> {
 
       allSongs.push(...pageData);
       
-      // If we got less than 20 songs, this is likely the last page
       if (pageData.length < 20) {
         hasMore = false;
       }
 
       currentPage++;
-      
-      // Small delay to avoid overwhelming the API
       await sleep(100);
     } catch (error) {
       console.error(`Error fetching page ${currentPage}:`, error);
-      // Stop pagination on error
       hasMore = false;
     }
   }
@@ -143,9 +121,6 @@ async function fetchAllSongs(cookie: string): Promise<AudioInfo[]> {
   return allSongs;
 }
 
-/**
- * Helper function to sleep for a specified number of milliseconds
- */
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
