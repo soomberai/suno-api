@@ -915,7 +915,89 @@ class SunoApi {
       wav_url: audio.download_wav_url // Include WAV URL if available
     }));
   }
+// Enhancement to add to SunoApi class
+// Add this method to your SunoApi.ts file
 
+/**
+ * Retrieves ALL audio information by automatically paginating through all pages.
+ * This is a convenience method that wraps the get() method with pagination logic.
+ * @returns A promise that resolves to an array of ALL AudioInfo objects.
+ */
+public async getAllSongs(): Promise<AudioInfo[]> {
+  const allSongs: AudioInfo[] = [];
+  let currentPage = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    logger.info(`Fetching all songs - page ${currentPage}...`);
+    
+    try {
+      const pageData = await this.get(undefined, currentPage.toString());
+      
+      // If we get no songs or empty array, we've reached the end
+      if (!pageData || pageData.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      allSongs.push(...pageData);
+      
+      // If we got less than 20 songs, this is likely the last page
+      // (assuming the API returns 20 songs per page)
+      if (pageData.length < 20) {
+        hasMore = false;
+      }
+
+      currentPage++;
+      
+      // Small delay to avoid rate limiting
+      await sleep(0.1);
+    } catch (error) {
+      logger.error(`Error fetching page ${currentPage}:`, error);
+      // Stop pagination on error
+      throw error;
+    }
+  }
+
+  logger.info(`Total songs retrieved: ${allSongs.length} across ${currentPage} pages`);
+  return allSongs;
+}
+
+/**
+ * Get all songs and optionally download them as WAV files.
+ * @param downloadWav If true, also downloads WAV files for all songs.
+ * @param delayBetweenWavs Delay in seconds between WAV downloads (default: 3).
+ * @returns A promise that resolves to all songs with their WAV URLs if requested.
+ */
+public async getAllSongsWithWav(
+  downloadWav: boolean = false,
+  delayBetweenWavs: number = 3
+): Promise<AudioInfo[]> {
+  logger.info('Fetching all songs...');
+  const allSongs = await this.getAllSongs();
+  
+  if (!downloadWav) {
+    return allSongs;
+  }
+
+  logger.info(`Downloading WAV files for ${allSongs.length} songs...`);
+  const songIds = allSongs.map(song => song.id);
+  
+  // Use the existing batchGenerateWav method
+  const wavResults = await this.batchGenerateWav(songIds, true, delayBetweenWavs);
+  
+  // Map WAV URLs back to songs
+  const wavUrlMap = new Map(
+    wavResults
+      .filter(r => r.status === 'complete')
+      .map(r => [r.id, r.wav_url])
+  );
+  
+  return allSongs.map(song => ({
+    ...song,
+    wav_url: wavUrlMap.get(song.id) || song.wav_url
+  }));
+}
   /**
    * Retrieves information for a specific audio clip.
    * @param clipId The ID of the audio clip to retrieve information for.
