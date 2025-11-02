@@ -37,6 +37,7 @@ export interface AudioInfo {
   negative_tags?: string; // Negative tags of music.
   duration?: string; // Duration of the audio
   error_message?: string; // Error message if any
+  wav_url?: string; // URL of the WAV file (if generated)
 }
 
 interface PersonaResponse {
@@ -353,7 +354,7 @@ class SunoApi {
               };
               if (drag) {
                 // Say to the worker that he needs to click
-                payload.textinstructions = 'CLICK on the shapes at their edge or center as shown above—please be precise!';
+                payload.textinstructions = 'CLICK on the shapes at their edge or center as shown aboveâ€"please be precise!';
                 payload.imginstructions = (await fs.readFile(path.join(process.cwd(), 'public', 'drag-instructions.jpg'))).toString('base64');
               }
               captcha = await this.solver.coordinates(payload);
@@ -718,6 +719,116 @@ class SunoApi {
     }));
   }
 
+  /**
+   * Generate WAV file for a song. This triggers Suno to prepare the WAV version.
+   * @param song_id The ID of the song to generate WAV for.
+   * @param wait_audio If true, polls until WAV is ready and returns the download URL.
+   * @returns A promise that resolves to status or WAV URL.
+   */
+  public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{ status: string; wav_url?: string; message?: string }> {
+    await this.keepAlive(false);
+    
+    logger.info(`Triggering WAV generation for song: ${song_id}`);
+    
+    try {
+      // Trigger WAV generation
+      const response = await this.client.post(
+        `${SunoApi.BASE_URL}/api/clip/${song_id}/download/wav/`,
+        {},
+        { timeout: 15000 }
+      );
+
+      if (response.status !== 200) {
+        throw new Error('Failed to trigger WAV generation: ' + response.statusText);
+      }
+
+      logger.info('WAV generation triggered successfully');
+
+      // If wait_audio is false, return immediately
+      if (!wait_audio) {
+        return {
+          status: 'processing',
+          message: 'WAV generation started. Check back in 10-20 seconds.'
+        };
+      }
+
+      // Poll for WAV readiness
+      logger.info('Polling for WAV file readiness...');
+      const startTime = Date.now();
+      const maxWaitTime = 60000; // 60 seconds max wait
+
+      while (Date.now() - startTime < maxWaitTime) {
+        await sleep(3); // Wait 3 seconds between checks
+        
+        // Get clip info to check for WAV URL
+        const clipInfo: any = await this.getClip(song_id);
+        
+        if (clipInfo.download_wav_url) {
+          logger.info(`WAV file ready! URL: ${clipInfo.download_wav_url}`);
+          return {
+            status: 'complete',
+            wav_url: clipInfo.download_wav_url
+          };
+        }
+        
+        logger.info('WAV not ready yet, continuing to poll...');
+      }
+
+      // Timeout reached
+      return {
+        status: 'timeout',
+        message: 'WAV generation timed out. Try checking the clip info directly later.'
+      };
+
+    } catch (error: any) {
+      logger.error('Error generating WAV:', error);
+      throw new Error('Failed to generate WAV: ' + error.message);
+    }
+  }
+
+  /**
+   * Batch generate WAV files for multiple songs.
+   * @param song_ids Array of song IDs to generate WAVs for.
+   * @param wait_audio If true, waits for each WAV to be ready before moving to next.
+   * @param delay_between_requests Delay in seconds between triggering each WAV generation (to avoid rate limits).
+   * @returns A promise that resolves to an array of results for each song.
+   */
+  public async batchGenerateWav(
+    song_ids: string[], 
+    wait_audio: boolean = true,
+    delay_between_requests: number = 2
+  ): Promise<Array<{ id: string; status: string; wav_url?: string; error?: string }>> {
+    const results = [];
+    
+    for (let i = 0; i < song_ids.length; i++) {
+      const song_id = song_ids[i];
+      logger.info(`Processing WAV ${i + 1}/${song_ids.length}: ${song_id}`);
+      
+      try {
+        const result = await this.generateWav(song_id, wait_audio);
+        results.push({
+          id: song_id,
+          ...result
+        });
+      } catch (error: any) {
+        logger.error(`Failed to generate WAV for ${song_id}:`, error);
+        results.push({
+          id: song_id,
+          status: 'error',
+          error: error.message
+        });
+      }
+      
+      // Delay between requests to avoid rate limiting (except for last item)
+      if (i < song_ids.length - 1) {
+        logger.info(`Waiting ${delay_between_requests} seconds before next request...`);
+        await sleep(delay_between_requests);
+      }
+    }
+    
+    return results;
+  }
+
 
   /**
    * Get the lyric alignment for a song.
@@ -800,7 +911,8 @@ class SunoApi {
       type: audio.metadata.type,
       tags: audio.metadata.tags,
       duration: audio.metadata.duration,
-      error_message: audio.metadata.error_message
+      error_message: audio.metadata.error_message,
+      wav_url: audio.download_wav_url // Include WAV URL if available
     }));
   }
 
