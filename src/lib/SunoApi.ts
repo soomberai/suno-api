@@ -733,7 +733,7 @@ class SunoApi {
     try {
       // Trigger WAV generation
       const response = await this.client.post(
-        `${SunoApi.BASE_URL}/api/clip/${song_id}/download/wav/`,
+        `${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`,
         {},
         { timeout: 15000 }
       );
