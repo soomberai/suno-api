@@ -738,7 +738,7 @@ class SunoApi {
         { timeout: 15000 }
       );
 
-      if (response.status !== 200) {
+      if (response.status !== 200 && response.status !== 204) {
         throw new Error('Failed to trigger WAV generation: ' + response.statusText);
       }
 
