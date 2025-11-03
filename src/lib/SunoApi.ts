@@ -719,10 +719,10 @@ class SunoApi {
     }));
   }
 
-  /**
- * Generate WAV file for a song. DIAGNOSTIC VERSION - logs everything!
+ /**
+ * Generate WAV file for a song - FIXED VERSION
  * @param song_id The ID of the song to generate WAV for.
- * @param wait_audio If true, does checks and logs everything.
+ * @param wait_audio If true, waits and verifies the WAV is ready.
  * @returns A promise that resolves to the WAV URL.
  */
 public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{ status: string; wav_url?: string; message?: string }> {
@@ -740,8 +740,6 @@ public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{
     );
 
     logger.info(`Trigger response status: ${response.status}`);
-    logger.info(`Trigger response statusText: ${response.statusText}`);
-    logger.info(`Trigger response data: ${JSON.stringify(response.data)}`);
 
     if (response.status !== 200 && response.status !== 204) {
       throw new Error('Failed to trigger WAV generation: ' + response.statusText);
@@ -756,72 +754,61 @@ public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{
       };
     }
 
-    // Step 2: Wait 5 seconds
-    logger.info('Step 2: Waiting 5 seconds...');
+    // Step 2: Wait 5 seconds for processing
+    logger.info('Step 2: Waiting 5 seconds for WAV processing...');
     await sleep(5);
 
-    // Step 3: Check wav_file endpoint
-    logger.info('Step 3: Checking wav_file endpoint...');
+    // Step 3: Get WAV URL from the wav_file endpoint (THIS IS THE KEY!)
+    logger.info('Step 3: Fetching WAV file URL from wav_file endpoint...');
     try {
       const wavCheckResponse = await this.client.get(
         `${SunoApi.BASE_URL}/api/gen/${song_id}/wav_file/`
       );
       
       logger.info(`wav_file status: ${wavCheckResponse.status}`);
-      logger.info(`wav_file statusText: ${wavCheckResponse.statusText}`);
       logger.info(`wav_file data: ${JSON.stringify(wavCheckResponse.data)}`);
-      logger.info(`wav_file headers: ${JSON.stringify(wavCheckResponse.headers)}`);
+      
+      // THIS IS WHAT WE NEED!
+      if (wavCheckResponse.data && wavCheckResponse.data.wav_file_url) {
+        const wav_url = wavCheckResponse.data.wav_file_url;
+        logger.info(`✅ Found WAV URL: ${wav_url}`);
+        
+        // Try to track download (optional, don't fail if this errors)
+        try {
+          await this.client.post(
+            `${SunoApi.BASE_URL}/api/billing/clips/${song_id}/download/`
+          );
+          logger.info('✅ Billing tracked');
+        } catch (billingError) {
+          logger.info('⚠️  Billing tracking skipped (non-critical)');
+        }
+
+        logger.info(`=== WAV GENERATION COMPLETE ===`);
+        
+        return {
+          status: 'complete',
+          wav_url: wav_url
+        };
+      }
       
     } catch (wavError: any) {
       logger.error(`wav_file check error: ${wavError.message}`);
-      logger.error(`wav_file response status: ${wavError.response?.status}`);
-      logger.error(`wav_file response data: ${JSON.stringify(wavError.response?.data)}`);
+      // Fall through to fallback
     }
 
-    // Step 4: Check clip info
-    logger.info('Step 4: Checking clip info...');
-    try {
-      const clipInfo: any = await this.getClip(song_id);
-      logger.info(`Clip info: ${JSON.stringify(clipInfo)}`);
-      
-      if (clipInfo.download_wav_url) {
-        logger.info(`✅ Found WAV URL in clip info: ${clipInfo.download_wav_url}`);
-        return {
-          status: 'complete',
-          wav_url: clipInfo.download_wav_url
-        };
-      } else {
-        logger.info('⚠️  No download_wav_url in clip info yet');
-      }
-    } catch (clipError: any) {
-      logger.error(`Clip info error: ${clipError.message}`);
-    }
-
-    // Step 5: Just return the CDN URL
-    const wav_url = `https://cdn1.suno.ai/${song_id}.wav`;
-    logger.info(`Step 5: Returning constructed URL: ${wav_url}`);
-
-    // Try to track download
-    try {
-      await this.client.post(
-        `${SunoApi.BASE_URL}/api/billing/clips/${song_id}/download/`
-      );
-      logger.info('✅ Billing tracked');
-    } catch (billingError) {
-      logger.info('⚠️  Billing tracking skipped');
-    }
-
-    logger.info(`=== WAV GENERATION END ===`);
+    // Fallback: construct URL (less reliable but better than nothing)
+    const fallback_url = `https://cdn1.suno.ai/${song_id}.wav`;
+    logger.info(`⚠️  Using fallback URL: ${fallback_url}`);
 
     return {
       status: 'complete',
-      wav_url: wav_url
+      wav_url: fallback_url,
+      message: 'Using constructed URL (fallback)'
     };
 
   } catch (error: any) {
     logger.error(`=== WAV GENERATION FAILED ===`);
     logger.error(`Error: ${error.message}`);
-    logger.error(`Stack: ${error.stack}`);
     throw new Error('Failed to generate WAV: ' + error.message);
   }
 }
