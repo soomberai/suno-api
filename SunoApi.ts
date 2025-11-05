@@ -719,99 +719,72 @@ class SunoApi {
     }));
   }
 
- /**
- * Generate WAV file for a song - FIXED VERSION
- * @param song_id The ID of the song to generate WAV for.
- * @param wait_audio If true, waits and verifies the WAV is ready.
- * @returns A promise that resolves to the WAV URL.
- */
-public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{ status: string; wav_url?: string; message?: string }> {
-  await this.keepAlive(false);
-  
-  logger.info(`=== WAV GENERATION START for ${song_id} ===`);
-  
-  try {
-    // Step 1: Trigger conversion
-    logger.info('Step 1: Triggering WAV conversion...');
-    const response = await this.client.post(
-      `${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`,
-      {},
-      { timeout: 15000 }
-    );
-
-    logger.info(`Trigger response status: ${response.status}`);
-
-    if (response.status !== 200 && response.status !== 204) {
-      throw new Error('Failed to trigger WAV generation: ' + response.statusText);
-    }
-
-    logger.info('✅ WAV generation triggered successfully');
-
-    if (!wait_audio) {
-      return {
-        status: 'processing',
-        wav_url: `https://cdn1.suno.ai/${song_id}.wav`
-      };
-    }
-
-    // Step 2: Wait 5 seconds for processing
-    logger.info('Step 2: Waiting 5 seconds for WAV processing...');
-    await sleep(5);
-
-    // Step 3: Get WAV URL from the wav_file endpoint (THIS IS THE KEY!)
-    logger.info('Step 3: Fetching WAV file URL from wav_file endpoint...');
+  /**
+   * Generate WAV file for a song. This triggers Suno to prepare the WAV version.
+   * @param song_id The ID of the song to generate WAV for.
+   * @param wait_audio If true, polls until WAV is ready and returns the download URL.
+   * @returns A promise that resolves to status or WAV URL.
+   */
+  public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{ status: string; wav_url?: string; message?: string }> {
+    await this.keepAlive(false);
+    
+    logger.info(`Triggering WAV generation for song: ${song_id}`);
+    
     try {
-      const wavCheckResponse = await this.client.get(
-        `${SunoApi.BASE_URL}/api/gen/${song_id}/wav_file/`
+      // Trigger WAV generation
+      const response = await this.client.post(
+        `${SunoApi.BASE_URL}/api/clip/${song_id}/download/wav/`,
+        {},
+        { timeout: 15000 }
       );
-      
-      logger.info(`wav_file status: ${wavCheckResponse.status}`);
-      logger.info(`wav_file data: ${JSON.stringify(wavCheckResponse.data)}`);
-      
-      // THIS IS WHAT WE NEED!
-      if (wavCheckResponse.data && wavCheckResponse.data.wav_file_url) {
-        const wav_url = wavCheckResponse.data.wav_file_url;
-        logger.info(`✅ Found WAV URL: ${wav_url}`);
-        
-        // Try to track download (optional, don't fail if this errors)
-        try {
-          await this.client.post(
-            `${SunoApi.BASE_URL}/api/billing/clips/${song_id}/download/`
-          );
-          logger.info('✅ Billing tracked');
-        } catch (billingError) {
-          logger.info('⚠️  Billing tracking skipped (non-critical)');
-        }
 
-        logger.info(`=== WAV GENERATION COMPLETE ===`);
-        
+      if (response.status !== 200) {
+        throw new Error('Failed to trigger WAV generation: ' + response.statusText);
+      }
+
+      logger.info('WAV generation triggered successfully');
+
+      // If wait_audio is false, return immediately
+      if (!wait_audio) {
         return {
-          status: 'complete',
-          wav_url: wav_url
+          status: 'processing',
+          message: 'WAV generation started. Check back in 10-20 seconds.'
         };
       }
-      
-    } catch (wavError: any) {
-      logger.error(`wav_file check error: ${wavError.message}`);
-      // Fall through to fallback
+
+      // Poll for WAV readiness
+      logger.info('Polling for WAV file readiness...');
+      const startTime = Date.now();
+      const maxWaitTime = 60000; // 60 seconds max wait
+
+      while (Date.now() - startTime < maxWaitTime) {
+        await sleep(3); // Wait 3 seconds between checks
+        
+        // Get clip info to check for WAV URL
+        const clipInfo: any = await this.getClip(song_id);
+        
+        if (clipInfo.download_wav_url) {
+          logger.info(`WAV file ready! URL: ${clipInfo.download_wav_url}`);
+          return {
+            status: 'complete',
+            wav_url: clipInfo.download_wav_url
+          };
+        }
+        
+        logger.info('WAV not ready yet, continuing to poll...');
+      }
+
+      // Timeout reached
+      return {
+        status: 'timeout',
+        message: 'WAV generation timed out. Try checking the clip info directly later.'
+      };
+
+    } catch (error: any) {
+      logger.error('Error generating WAV:', error);
+      throw new Error('Failed to generate WAV: ' + error.message);
     }
-
-    // Fallback: construct URL (less reliable but better than nothing)
-    const fallback_url = `https://cdn1.suno.ai/${song_id}.wav`;
-    logger.info(`⚠️  Using fallback URL: ${fallback_url}`);
-
-    return {
-      status: 'complete',
-      wav_url: fallback_url,
-      message: 'Using constructed URL (fallback)'
-    };
-
-  } catch (error: any) {
-    logger.error(`=== WAV GENERATION FAILED ===`);
-    logger.error(`Error: ${error.message}`);
-    throw new Error('Failed to generate WAV: ' + error.message);
   }
-}
 
   /**
    * Batch generate WAV files for multiple songs.
@@ -942,89 +915,7 @@ public async generateWav(song_id: string, wait_audio: boolean = true): Promise<{
       wav_url: audio.download_wav_url // Include WAV URL if available
     }));
   }
-// Enhancement to add to SunoApi class
-// Add this method to your SunoApi.ts file
 
-/**
- * Retrieves ALL audio information by automatically paginating through all pages.
- * This is a convenience method that wraps the get() method with pagination logic.
- * @returns A promise that resolves to an array of ALL AudioInfo objects.
- */
-public async getAllSongs(): Promise<AudioInfo[]> {
-  const allSongs: AudioInfo[] = [];
-  let currentPage = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    logger.info(`Fetching all songs - page ${currentPage}...`);
-    
-    try {
-      const pageData = await this.get(undefined, currentPage.toString());
-      
-      // If we get no songs or empty array, we've reached the end
-      if (!pageData || pageData.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      allSongs.push(...pageData);
-      
-      // If we got less than 20 songs, this is likely the last page
-      // (assuming the API returns 20 songs per page)
-      if (pageData.length < 20) {
-        hasMore = false;
-      }
-
-      currentPage++;
-      
-      // Small delay to avoid rate limiting
-      await sleep(0.1);
-    } catch (error) {
-      logger.error(`Error fetching page ${currentPage}:`, error);
-      // Stop pagination on error
-      throw error;
-    }
-  }
-
-  logger.info(`Total songs retrieved: ${allSongs.length} across ${currentPage} pages`);
-  return allSongs;
-}
-
-/**
- * Get all songs and optionally download them as WAV files.
- * @param downloadWav If true, also downloads WAV files for all songs.
- * @param delayBetweenWavs Delay in seconds between WAV downloads (default: 3).
- * @returns A promise that resolves to all songs with their WAV URLs if requested.
- */
-public async getAllSongsWithWav(
-  downloadWav: boolean = false,
-  delayBetweenWavs: number = 3
-): Promise<AudioInfo[]> {
-  logger.info('Fetching all songs...');
-  const allSongs = await this.getAllSongs();
-  
-  if (!downloadWav) {
-    return allSongs;
-  }
-
-  logger.info(`Downloading WAV files for ${allSongs.length} songs...`);
-  const songIds = allSongs.map(song => song.id);
-  
-  // Use the existing batchGenerateWav method
-  const wavResults = await this.batchGenerateWav(songIds, true, delayBetweenWavs);
-  
-  // Map WAV URLs back to songs
-  const wavUrlMap = new Map(
-    wavResults
-      .filter(r => r.status === 'complete')
-      .map(r => [r.id, r.wav_url])
-  );
-  
-  return allSongs.map(song => ({
-    ...song,
-    wav_url: wavUrlMap.get(song.id) || song.wav_url
-  }));
-}
   /**
    * Retrieves information for a specific audio clip.
    * @param clipId The ID of the audio clip to retrieve information for.
